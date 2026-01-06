@@ -1,8 +1,14 @@
 import React, { useState, useEffect } from 'react';
-import { Upload, DollarSign, TrendingUp, TrendingDown, PieChart, Check, X, ArrowRight, Database, RefreshCw, Save } from 'lucide-react';
+import { Upload, DollarSign, TrendingUp, TrendingDown, Check, X, ArrowRight, Database, RefreshCw, Save } from 'lucide-react';
 import Papa from 'papaparse';
+import TransactionGrid from './components/TransactionGrid';
+import WidgetPanel from './components/WidgetPanel';
 
 const API_URL = 'http://localhost:3001/api';
+
+const DEFAULT_WIDGETS = [
+  { id: 1, title: 'Spending by Category', groupBy: 'category', metric: 'expenses', limit: 10 },
+];
 
 export default function App() {
   const [transactions, setTransactions] = useState([]);
@@ -15,6 +21,15 @@ export default function App() {
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState(null);
+  const [widgets, setWidgets] = useState(() => {
+    const saved = localStorage.getItem('bankAnalyzerWidgets');
+    return saved ? JSON.parse(saved) : DEFAULT_WIDGETS;
+  });
+
+  // Persist widgets to localStorage
+  useEffect(() => {
+    localStorage.setItem('bankAnalyzerWidgets', JSON.stringify(widgets));
+  }, [widgets]);
 
   // Fetch saved transactions from database
   const fetchTransactions = async () => {
@@ -449,74 +464,17 @@ export default function App() {
               </div>
             </div>
 
-            {Object.keys(summary.categoryTotals).length > 0 && (
-              <div className="bg-white rounded-2xl shadow-xl p-8 mb-6">
-                <div className="flex items-center mb-6">
-                  <PieChart className="h-6 w-6 text-indigo-600 mr-2" />
-                  <h2 className="text-2xl font-bold text-gray-800">Spending by Category</h2>
-                </div>
-                <div className="space-y-4">
-                  {Object.entries(summary.categoryTotals)
-                    .sort(([, a], [, b]) => b - a)
-                    .map(([category, amount]) => {
-                      const percentage = (amount / summary.expenses) * 100;
-                      return (
-                        <div key={category}>
-                          <div className="flex justify-between mb-2">
-                            <span className="font-medium text-gray-700">{category}</span>
-                            <span className="text-gray-600">
-                              €{amount.toFixed(2)} ({percentage.toFixed(1)}%)
-                            </span>
-                          </div>
-                          <div className="w-full bg-gray-200 rounded-full h-3">
-                            <div
-                              className="bg-indigo-600 h-3 rounded-full transition-all duration-500"
-                              style={{ width: `${percentage}%` }}
-                            />
-                          </div>
-                        </div>
-                      );
-                    })}
-                </div>
-              </div>
-            )}
-
-            <div className="bg-white rounded-2xl shadow-xl p-8">
-              <h2 className="text-2xl font-bold text-gray-800 mb-6">
-                Transaction History ({transactions.length} transactions)
-              </h2>
-              <p className="text-sm text-gray-500 mb-4">Sorted by date (newest first)</p>
-              <div className="overflow-x-auto">
-                <table className="w-full">
-                  <thead>
-                    <tr className="border-b-2 border-gray-200">
-                      <th className="text-left py-3 px-4 font-semibold text-gray-700">Date</th>
-                      <th className="text-left py-3 px-4 font-semibold text-gray-700">Description</th>
-                      <th className="text-left py-3 px-4 font-semibold text-gray-700">Category</th>
-                      <th className="text-right py-3 px-4 font-semibold text-gray-700">Amount</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {transactions.map((txn) => (
-                      <tr key={txn.id} className="border-b border-gray-100 hover:bg-gray-50">
-                        <td className="py-3 px-4 text-gray-600">{txn.date}</td>
-                        <td className="py-3 px-4 text-gray-800 max-w-md truncate">{txn.description}</td>
-                        <td className="py-3 px-4">
-                          <span className="px-3 py-1 bg-indigo-100 text-indigo-700 rounded-full text-sm">
-                            {txn.category}
-                          </span>
-                        </td>
-                        <td className={`py-3 px-4 text-right font-semibold ${
-                          txn.amount >= 0 ? 'text-green-600' : 'text-red-600'
-                        }`}>
-                          €{txn.amount >= 0 ? '+' : ''}{txn.amount.toFixed(2)}
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
+            {/* Dynamic Widgets */}
+            <div className="mb-6">
+              <WidgetPanel
+                transactions={transactions}
+                widgets={widgets}
+                onWidgetsChange={setWidgets}
+              />
             </div>
+
+            {/* Transaction Grid */}
+            <TransactionGrid transactions={transactions} />
           </>
         )}
       </div>
