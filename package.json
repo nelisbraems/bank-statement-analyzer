@@ -8,11 +8,12 @@
     "build": "vite build",
     "server": "node server.js",
     "server:test": "NODE_ENV=test node server.js",
+    "start": "NODE_ENV=production node server.js",
     "lint": "eslint .",
     "preview": "vite preview",
     "test": "vitest run",
     "test:watch": "vitest",
-    "prepare": "husky"
+    "prepare": "husky || true"
   },
   "dependencies": {
     "cors": "^2.8.5",
