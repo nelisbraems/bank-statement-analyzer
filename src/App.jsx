@@ -192,6 +192,7 @@ export default function App() {
         id: t._id || idx,
         date: t.date,
         description: t.description,
+        details: t.details || null,
         amount: t.amount,
         type: t.type,
         category: t.category,
@@ -261,13 +262,68 @@ export default function App() {
     { key: 'date', label: 'Execution Date', description: 'Transaction date (Uitvoeringsdatum)' },
     { key: 'amount', label: 'Amount', description: 'Transaction amount (Bedrag)' },
     { key: 'description', label: 'Description', description: 'Transaction description (Mededeling)' },
+    { key: 'details', label: 'Details', description: 'Transaction details (Details/Omschrijving)' },
     { key: 'counterparty', label: 'Counterparty Name', description: 'Name of counterparty (Naam van de tegenpartij)' },
     { key: 'type', label: 'Transaction Type', description: 'Type of transaction (Type verrichting)' },
     { key: 'status', label: 'Status', description: 'Transaction status (Status)' }
   ];
 
-  // Extract counterparty from description when not provided
-  const extractCounterparty = (description, type) => {
+  // Extract counterparty from description or details when not provided
+  const extractCounterparty = (description, details) => {
+    // First try to extract from details (often has more info for debit card payments)
+    if (details) {
+      const detailsStr = details.trim();
+
+      // Pattern: "BETALING MET DEBETKAART NUMMER XXXX XXXX XXXX XXXX [optional: store code] [MERCHANT NAME] [CITY] [POSTAL] [DATE]"
+      // Examples:
+      //   "BETALING MET DEBETKAART NUMMER 4871 04XX XXXX 8334 ACTION ZOTTEGEM 9620 30/12/2025"
+      //   "BETALING MET DEBETKAART NUMMER 4871 04XX XXXX 7976 GRAND CAFE DRUGSTORE HASSELT 3500 01/01/2026"
+      //   "BETALING MET DEBETKAART NUMMER 4871 04XX XXXX 8334 AD DELH ZOTTEGEM 9620 30/12/2025"
+      //   "BETALING MET DEBETKAART NUMMER 4871 04XX XXXX 8334 3943 DREAMLAND ZOTTEGE 9620 ZOTTEGEM 31/12/2025"
+      //   "BETALING MET DEBETKAART NUMMER 4871 04XX XXXX 7976 3599 COLRUYT"
+      // Strategy: get everything after card number, strip store code/city/postal/date from the end
+      const debitCardMatch = detailsStr.match(/BETALING MET DEBETKAART NUMMER \d{4} \d{2}XX XXXX \d{4}\s+(.+)/i);
+      if (debitCardMatch) {
+        let rest = debitCardMatch[1].trim();
+        // Remove date at the end (dd/mm/yyyy)
+        rest = rest.replace(/\s+\d{2}\/\d{2}\/\d{4}\s*$/, '').trim();
+        // Remove location after postal code (e.g., "9620 ZOTTEGEM" at end)
+        rest = rest.replace(/\s+\d{4}\s+[A-Z]+\s*$/i, '').trim();
+        // Remove trailing postal code and truncated city (e.g., "ZOTTEGE 9620")
+        rest = rest.replace(/\s+[A-Z]+\s+\d{4}\s*$/i, '').trim();
+        // Remove leading store code if present (4 digits at start)
+        rest = rest.replace(/^\d{4}\s+/, '').trim();
+
+        // If we still have something, return it
+        if (rest && !rest.match(/^\d+$/)) {
+          return expandMerchantName(rest);
+        }
+      }
+
+      // Pattern: "TERUGBETALING WOONKREDIET [account] [reference]" - house loan repayment
+      if (detailsStr.match(/^TERUGBETALING WOONKREDIET/i)) {
+        return 'Woonkrediet (Hypotheek)';
+      }
+
+      // Pattern: "GELDOPNEMING ... [ATM LOCATION]"
+      const atmMatch = detailsStr.match(/GELDOPNEMING[^A-Z]*([A-Z][A-Z\s]+?)\s+\d{4}/i);
+      if (atmMatch) {
+        return `ATM ${atmMatch[1].trim()}`;
+      }
+
+      // Pattern: "DOMICILIERING ... [CREDITOR]"
+      const domMatch = detailsStr.match(/DOMICILIERING[^:]*:\s*([^,\n]+)/i);
+      if (domMatch) {
+        return domMatch[1].trim();
+      }
+
+      // Pattern: "OVERSCHRIJVING ... NAAM: [NAME]" or just extract first recognizable name
+      const nameMatch = detailsStr.match(/NAAM[:\s]+([A-Za-z][A-Za-z\s&\-'\.]+?)(?:\s+[A-Z]{2}\d|\s+IBAN|\s+BIC|\s*$)/i);
+      if (nameMatch) {
+        return nameMatch[1].trim();
+      }
+    }
+
     if (!description) return null;
     const desc = description.trim();
 
@@ -305,6 +361,48 @@ export default function App() {
     return null;
   };
 
+  // Expand common merchant abbreviations
+  const expandMerchantName = (name) => {
+    const abbreviations = {
+      'AD DELH': 'AD Delhaize',
+      'DELH': 'Delhaize',
+      'COLR': 'Colruyt',
+      'CARF': 'Carrefour',
+      'CARREF': 'Carrefour',
+      'LIDL': 'Lidl',
+      'ALDI': 'Aldi',
+      'AH': 'Albert Heijn',
+      'ALBERT H': 'Albert Heijn',
+      'KRUIDV': 'Kruidvat',
+      'HEMA': 'HEMA',
+      'ACTION': 'Action',
+      'ZEEMAN': 'Zeeman',
+      'PRIMARK': 'Primark',
+      'C&A': 'C&A',
+      'H&M': 'H&M',
+      'MEDIAMARKT': 'MediaMarkt',
+      'MEDIAMARK': 'MediaMarkt',
+      'FNAC': 'Fnac',
+      'BRICO': 'Brico',
+      'HUBO': 'Hubo',
+      'GAMMA': 'Gamma',
+      'DREAMLAND': 'Dreamland',
+      'STANDAARD': 'Standaard Boekhandel',
+    };
+
+    const upperName = name.toUpperCase().trim();
+    for (const [abbrev, full] of Object.entries(abbreviations)) {
+      if (upperName.startsWith(abbrev)) {
+        return full;
+      }
+    }
+
+    // Title case the name if no match found
+    return name.split(' ')
+      .map(word => word.charAt(0).toUpperCase() + word.slice(1).toLowerCase())
+      .join(' ');
+  };
+
   // Check if transaction is a credit card payment (to exclude from spending totals)
   const isCreditCardPayment = (description, type) => {
     if (type === 'Kredietkaartbetaling') return true;
@@ -338,14 +436,15 @@ export default function App() {
   };
 
   const detectColumns = (headers) => {
-    const mapping = { date: '', amount: '', description: '', counterparty: '', type: '', status: '' };
+    const mapping = { date: '', amount: '', description: '', details: '', counterparty: '', type: '', status: '' };
     headers.forEach(header => {
       const h = header.toLowerCase();
-      if (h.includes('uitvoeringsdatum') || h.includes('datum')) mapping.date = header;
+      if (h.includes('uitvoeringsdatum') || (h.includes('datum') && !h.includes('valuta'))) mapping.date = header;
       else if (h.includes('bedrag') || h.includes('amount')) mapping.amount = header;
-      else if (h.includes('mededeling') || h.includes('description')) mapping.description = header;
+      else if (h.includes('mededeling') || h === 'description') mapping.description = header;
+      else if (h === 'details' || h.includes('omschrijving')) mapping.details = header;
       else if (h.includes('naam van de tegenpartij') || h.includes('tegenpartij')) mapping.counterparty = header;
-      else if (h.includes('type verrichting') || h.includes('type')) mapping.type = header;
+      else if (h.includes('type verrichting') || h === 'type') mapping.type = header;
       else if (h.includes('status')) mapping.status = header;
     });
     return mapping;
@@ -396,15 +495,20 @@ export default function App() {
 
     const processed = rawData.map((row, idx) => {
       const description = String(row[columnMapping.description] ?? '');
+      const details = String(row[columnMapping.details] ?? '');
       let counterparty = String(row[columnMapping.counterparty] ?? '').trim();
       const type = row[columnMapping.type] || '';
 
-      // Extract counterparty from description if not provided
+      // Extract counterparty from description/details if not provided
       if (!counterparty) {
-        counterparty = extractCounterparty(description, type) || '';
+        counterparty = extractCounterparty(description, details) || '';
       }
 
-      const fullDescription = counterparty ? `${counterparty} - ${description}` : description;
+      // Use details as description if description is empty but details exists
+      const primaryDescription = description || details;
+      const fullDescription = counterparty
+        ? `${counterparty} - ${primaryDescription}`
+        : primaryDescription;
 
       let amount = row[columnMapping.amount];
       if (typeof amount === 'string') {
@@ -413,12 +517,13 @@ export default function App() {
       if (isNaN(amount)) amount = 0;
 
       // Check if this is a credit card payment
-      const creditCardPayment = isCreditCardPayment(description, type);
+      const creditCardPayment = isCreditCardPayment(description || details, type);
 
       return {
         id: idx,
         date: row[columnMapping.date] || '',
         description: fullDescription.trim(),
+        details: details || null,
         amount,
         type,
         status: row[columnMapping.status] || '',
@@ -427,8 +532,14 @@ export default function App() {
         isCreditCardPayment: creditCardPayment,
         source: 'bank_statement'
       };
-    }).filter(t => t.description && !isNaN(t.amount) &&
-              (!t.status || !t.status.toLowerCase().includes('geweigerd')));
+    }).filter(t => {
+      // Only filter out rejected transactions, keep everything else
+      const isRejected = t.status && t.status.toLowerCase().includes('geweigerd');
+      // Must have a date and valid amount
+      const hasDate = t.date && t.date.trim() !== '';
+      const hasAmount = !isNaN(t.amount);
+      return hasDate && hasAmount && !isRejected;
+    });
 
     processed.sort((a, b) => new Date(b.date) - new Date(a.date));
     setTransactions(processed);

@@ -83,6 +83,14 @@ function TransactionDetailModal({ transaction, onClose }) {
             />
           )}
 
+          {transaction.details && (
+            <DetailRow
+              icon={FileText}
+              label="Details"
+              value={transaction.details}
+            />
+          )}
+
           <DetailRow
             icon={Tag}
             label="Category"
@@ -156,6 +164,7 @@ export default function TransactionGrid({ transactions, categories }) {
     search: '',
     category: '',
     type: '',
+    counterparty: '',
     minAmount: '',
     maxAmount: '',
     startDate: '',
@@ -171,6 +180,11 @@ export default function TransactionGrid({ transactions, categories }) {
 
   const uniqueTypes = useMemo(() =>
     [...new Set(transactions.map(t => t.type).filter(Boolean))].sort(),
+    [transactions]
+  );
+
+  const uniqueCounterparties = useMemo(() =>
+    [...new Set(transactions.map(t => t.counterparty).filter(Boolean))].sort(),
     [transactions]
   );
 
@@ -192,6 +206,10 @@ export default function TransactionGrid({ transactions, categories }) {
 
       // Type filter
       if (filters.type && txn.type !== filters.type) return false;
+
+      // Counterparty filter
+      if (filters.counterparty === '__unknown__' && txn.counterparty) return false;
+      if (filters.counterparty && filters.counterparty !== '__unknown__' && txn.counterparty !== filters.counterparty) return false;
 
       // Amount filters
       if (filters.minAmount && txn.amount < parseFloat(filters.minAmount)) return false;
@@ -247,6 +265,7 @@ export default function TransactionGrid({ transactions, categories }) {
       search: '',
       category: '',
       type: '',
+      counterparty: '',
       minAmount: '',
       maxAmount: '',
       startDate: '',
@@ -351,6 +370,22 @@ export default function TransactionGrid({ transactions, categories }) {
               </select>
             </div>
 
+            {/* Counterparty filter */}
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Counterparty</label>
+              <select
+                value={filters.counterparty}
+                onChange={(e) => updateFilter('counterparty', e.target.value)}
+                className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500"
+              >
+                <option value="">All counterparties</option>
+                <option value="__unknown__">Unknown</option>
+                {uniqueCounterparties.map(cp => (
+                  <option key={cp} value={cp}>{cp}</option>
+                ))}
+              </select>
+            </div>
+
             {/* Amount range */}
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-1">Amount range</label>
@@ -429,6 +464,15 @@ export default function TransactionGrid({ transactions, categories }) {
               </th>
               <th
                 className="text-left py-3 px-4 font-semibold text-gray-700 cursor-pointer hover:bg-gray-50"
+                onClick={() => handleSort('counterparty')}
+              >
+                <div className="flex items-center gap-1">
+                  Counterparty
+                  <SortIcon field="counterparty" />
+                </div>
+              </th>
+              <th
+                className="text-left py-3 px-4 font-semibold text-gray-700 cursor-pointer hover:bg-gray-50"
                 onClick={() => handleSort('category')}
               >
                 <div className="flex items-center gap-1">
@@ -456,8 +500,11 @@ export default function TransactionGrid({ transactions, categories }) {
                 onClick={() => setSelectedTransaction(txn)}
               >
                 <td className="py-3 px-4 text-gray-600 whitespace-nowrap">{txn.date}</td>
-                <td className="py-3 px-4 text-gray-800 max-w-md truncate" title={txn.description}>
+                <td className="py-3 px-4 text-gray-800 max-w-xs truncate" title={txn.description}>
                   {txn.description}
+                </td>
+                <td className="py-3 px-4 text-gray-600 max-w-xs truncate" title={txn.counterparty}>
+                  {txn.counterparty || <span className="text-gray-400 italic">Unknown</span>}
                 </td>
                 <td className="py-3 px-4">
                   <span className="px-3 py-1 bg-indigo-100 text-indigo-700 rounded-full text-sm whitespace-nowrap">
