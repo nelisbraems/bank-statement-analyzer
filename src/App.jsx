@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Upload, DollarSign, TrendingUp, TrendingDown, Check, X, ArrowRight, Database, RefreshCw, Save } from 'lucide-react';
+import { Upload, DollarSign, TrendingUp, TrendingDown, Check, X, ArrowRight, Database, RefreshCw, Save, CreditCard } from 'lucide-react';
 import Papa from 'papaparse';
 import TransactionGrid from './components/TransactionGrid';
 import WidgetPanel from './components/WidgetPanel';
@@ -119,6 +119,52 @@ export default function App() {
     { key: 'status', label: 'Status', description: 'Transaction status (Status)' }
   ];
 
+  // Extract counterparty from description when not provided
+  const extractCounterparty = (description, type) => {
+    if (!description) return null;
+    const desc = description.trim();
+
+    // Pattern: "[4 digits] [Name] [Location] -" (bakery/shop terminal format)
+    const terminalMatch = desc.match(/^\d{4}\s+(.+?)\s+\w+\s+-$/);
+    if (terminalMatch) return terminalMatch[1].trim();
+
+    // Pattern: "[Name]: [reference]" (e.g., "Jaxx: 72288235")
+    const colonMatch = desc.match(/^([A-Za-z][A-Za-z0-9\s&'-]+):\s*\d+/);
+    if (colonMatch) return colonMatch[1].trim();
+
+    // Pattern: "[7-char code] [Name]" (e.g., "75Q9GCO Pelsbarn", "75MC00I H M Online BE")
+    const codeMatch = desc.match(/^[A-Z0-9]{7}\s+(.+?)(?:\s+(?:BE|NL|DE|FR))?$/i);
+    if (codeMatch) {
+      let name = codeMatch[1].trim();
+      name = name.replace(/\s+B\.?V\.?$/i, '').trim();
+      name = name.replace(/\s+-\s*balans-?$/i, '').trim();
+      if (name.match(/^H\s+M\b/i)) name = name.replace(/^H\s+M\b/i, 'H&M');
+      return name;
+    }
+
+    // Pattern: "ACUPUNCTUUR[LOCATION]"
+    if (desc.match(/^ACUPUNCTUUR[A-Z]/i)) {
+      const location = desc.replace(/^ACUPUNCTUUR/i, '');
+      return `Acupunctuur ${location.charAt(0).toUpperCase() + location.slice(1).toLowerCase()}`;
+    }
+
+    // Known brand patterns
+    if (desc.match(/Klarna$/i)) return 'Klarna';
+    if (desc.match(/SHEIN$/i)) return 'Shein';
+
+    // Credit card payment
+    if (desc.match(/^MASTERCARD\s+\d+/i)) return 'Mastercard Payment';
+
+    return null;
+  };
+
+  // Check if transaction is a credit card payment (to exclude from spending totals)
+  const isCreditCardPayment = (description, type) => {
+    if (type === 'Kredietkaartbetaling') return true;
+    if (description && description.match(/^MASTERCARD\s+\d+/i)) return true;
+    return false;
+  };
+
   const categorizeTransaction = (description, amount) => {
     const desc = description.toLowerCase();
     if (amount > 0) return 'Income';
@@ -203,26 +249,38 @@ export default function App() {
 
     const processed = rawData.map((row, idx) => {
       const description = String(row[columnMapping.description] ?? '');
-      const counterparty = String(row[columnMapping.counterparty] ?? '');
+      let counterparty = String(row[columnMapping.counterparty] ?? '').trim();
+      const type = row[columnMapping.type] || '';
+
+      // Extract counterparty from description if not provided
+      if (!counterparty) {
+        counterparty = extractCounterparty(description, type) || '';
+      }
+
       const fullDescription = counterparty ? `${counterparty} - ${description}` : description;
-      
+
       let amount = row[columnMapping.amount];
       if (typeof amount === 'string') {
         amount = parseFloat(amount.replace(',', '.').replace(/[^\d.-]/g, ''));
       }
       if (isNaN(amount)) amount = 0;
 
+      // Check if this is a credit card payment
+      const creditCardPayment = isCreditCardPayment(description, type);
+
       return {
         id: idx,
         date: row[columnMapping.date] || '',
         description: fullDescription.trim(),
         amount,
-        type: row[columnMapping.type] || '',
+        type,
         status: row[columnMapping.status] || '',
-        category: categorizeTransaction(fullDescription, amount),
-        counterparty
+        category: creditCardPayment ? 'Credit Card Payment' : categorizeTransaction(fullDescription, amount),
+        counterparty,
+        isCreditCardPayment: creditCardPayment,
+        source: 'bank_statement'
       };
-    }).filter(t => t.description && !isNaN(t.amount) && 
+    }).filter(t => t.description && !isNaN(t.amount) &&
               (!t.status || !t.status.toLowerCase().includes('geweigerd')));
 
     processed.sort((a, b) => new Date(b.date) - new Date(a.date));
@@ -232,10 +290,12 @@ export default function App() {
   };
 
   const calculateSummary = (txns) => {
-    const income = txns.filter(t => t.amount > 0).reduce((sum, t) => sum + t.amount, 0);
-    const expenses = Math.abs(txns.filter(t => t.amount < 0).reduce((sum, t) => sum + t.amount, 0));
+    // Exclude credit card payments from totals to avoid double-counting
+    const nonCreditCardTxns = txns.filter(t => !t.isCreditCardPayment);
+    const income = nonCreditCardTxns.filter(t => t.amount > 0).reduce((sum, t) => sum + t.amount, 0);
+    const expenses = Math.abs(nonCreditCardTxns.filter(t => t.amount < 0).reduce((sum, t) => sum + t.amount, 0));
     const categoryTotals = {};
-    txns.forEach(t => {
+    nonCreditCardTxns.forEach(t => {
       if (t.amount < 0) {
         categoryTotals[t.category] = (categoryTotals[t.category] || 0) + Math.abs(t.amount);
       }
@@ -249,6 +309,70 @@ export default function App() {
       processFile(file);
     } else {
       alert('Please upload a CSV file');
+    }
+  };
+
+  // Handle PDF upload for Mastercard statements
+  const handlePdfUpload = async (e) => {
+    const files = Array.from(e.target.files);
+    if (files.length === 0) return;
+
+    const pdfFiles = files.filter(f => f.type === 'application/pdf' || f.name.endsWith('.pdf'));
+    if (pdfFiles.length === 0) {
+      alert('Please upload PDF files');
+      return;
+    }
+
+    setLoading(true);
+    setError(null);
+
+    try {
+      const formData = new FormData();
+      pdfFiles.forEach(file => formData.append('files', file));
+
+      const res = await fetch(`${API_URL}/transactions/parse-pdf`, {
+        method: 'POST',
+        body: formData
+      });
+
+      if (!res.ok) throw new Error('Failed to parse PDF');
+
+      const data = await res.json();
+
+      if (data.transactions.length === 0) {
+        setError('No transactions found in the PDF(s). Make sure these are Mastercard statement PDFs.');
+        return;
+      }
+
+      // Process transactions with IDs
+      const processed = data.transactions.map((t, idx) => ({
+        ...t,
+        id: idx,
+        isCreditCardPayment: false // These ARE the credit card details, not the lump sum payment
+      }));
+
+      processed.sort((a, b) => {
+        // Parse DD/MM/YYYY dates
+        const parseDate = (d) => {
+          const [day, month, year] = d.split('/');
+          return new Date(year, month - 1, day);
+        };
+        return parseDate(b.date) - parseDate(a.date);
+      });
+
+      setTransactions(processed);
+      calculateSummary(processed);
+      setShowMapping(false);
+      setPreview({ totalRows: processed.length, isPdf: true, fileCount: pdfFiles.length });
+
+      if (data.errors && data.errors.length > 0) {
+        console.warn('PDF parsing errors:', data.errors);
+      }
+    } catch (err) {
+      console.error('PDF upload error:', err);
+      setError('Failed to parse PDF files. Please try again.');
+    } finally {
+      setLoading(false);
     }
   };
 
@@ -292,7 +416,7 @@ export default function App() {
                     className="text-sm text-indigo-600 hover:text-indigo-800 font-medium flex items-center gap-1"
                   >
                     <Upload className="h-4 w-4" />
-                    Import CSV
+                    Import Data
                   </button>
                 </>
               )}
@@ -301,7 +425,7 @@ export default function App() {
           <p className="text-gray-600 mb-6">
             {viewMode === 'saved'
               ? 'Viewing transactions from database'
-              : 'Upload your Belgian bank statement CSV to track income and expenses'}
+              : 'Upload bank statement CSV or Mastercard PDF statements'}
           </p>
 
           {error && (
@@ -317,20 +441,39 @@ export default function App() {
             </div>
           )}
 
-          {viewMode === 'upload' && !preview && (
-            <div className="border-2 border-dashed border-indigo-300 rounded-xl p-8 text-center hover:border-indigo-500 transition-colors bg-indigo-50">
-              <Upload className="mx-auto h-12 w-12 text-indigo-400 mb-4" />
-              <label className="cursor-pointer">
-                <span className="text-indigo-600 font-semibold hover:text-indigo-700">Click to upload</span>
-                <span className="text-gray-600"> or drag and drop</span>
-                <input type="file" accept=".csv" onChange={handleFileUpload} className="hidden" />
-              </label>
-              <p className="text-sm text-gray-500 mt-2">Belgian bank CSV format supported (KBC, BNP, ING, Belfius, etc.)</p>
+          {viewMode === 'upload' && !preview && !loading && (
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+              {/* CSV Upload */}
+              <div className="border-2 border-dashed border-indigo-300 rounded-xl p-8 text-center hover:border-indigo-500 transition-colors bg-indigo-50">
+                <Upload className="mx-auto h-12 w-12 text-indigo-400 mb-4" />
+                <label className="cursor-pointer">
+                  <span className="text-indigo-600 font-semibold hover:text-indigo-700">Bank Statement CSV</span>
+                  <input type="file" accept=".csv" onChange={handleFileUpload} className="hidden" />
+                </label>
+                <p className="text-sm text-gray-500 mt-2">KBC, BNP, ING, Belfius, etc.</p>
+              </div>
+
+              {/* PDF Upload */}
+              <div className="border-2 border-dashed border-orange-300 rounded-xl p-8 text-center hover:border-orange-500 transition-colors bg-orange-50">
+                <CreditCard className="mx-auto h-12 w-12 text-orange-400 mb-4" />
+                <label className="cursor-pointer">
+                  <span className="text-orange-600 font-semibold hover:text-orange-700">Mastercard PDF</span>
+                  <input type="file" accept=".pdf" multiple onChange={handlePdfUpload} className="hidden" />
+                </label>
+                <p className="text-sm text-gray-500 mt-2">Upload one or more statement PDFs</p>
+              </div>
+            </div>
+          )}
+
+          {viewMode === 'upload' && loading && (
+            <div className="text-center py-12">
+              <RefreshCw className="h-8 w-8 text-indigo-500 animate-spin mx-auto mb-4" />
+              <p className="text-gray-600">Processing files...</p>
             </div>
           )}
         </div>
 
-        {preview && showMapping && (
+        {preview && showMapping && !preview.isPdf && (
           <div className="bg-white rounded-2xl shadow-xl p-8 mb-6">
             <h2 className="text-2xl font-bold text-gray-800 mb-4">Map Your Columns</h2>
             <p className="text-gray-600 mb-6">

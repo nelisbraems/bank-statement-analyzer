@@ -17,6 +17,12 @@ const METRIC_OPTIONS = [
   { value: 'avgAmount', label: 'Average Amount' },
 ];
 
+const SOURCE_FILTER_OPTIONS = [
+  { value: 'all', label: 'All Sources' },
+  { value: 'bank_statement', label: 'Bank Statement (CSV)' },
+  { value: 'mastercard_pdf', label: 'Mastercard (PDF)' },
+];
+
 function Widget({ widget, transactions, onRemove, onUpdate }) {
   const [isCollapsed, setIsCollapsed] = useState(false);
   const [isEditing, setIsEditing] = useState(false);
@@ -24,7 +30,13 @@ function Widget({ widget, transactions, onRemove, onUpdate }) {
   const aggregatedData = useMemo(() => {
     const groups = {};
 
-    transactions.forEach(txn => {
+    // Filter by source if specified
+    const sourceFilter = widget.sourceFilter || 'all';
+    const filteredTransactions = sourceFilter === 'all'
+      ? transactions
+      : transactions.filter(txn => txn.source === sourceFilter);
+
+    filteredTransactions.forEach(txn => {
       let key;
       switch (widget.groupBy) {
         case 'month':
@@ -76,7 +88,7 @@ function Widget({ widget, transactions, onRemove, onUpdate }) {
         return bVal - aVal;
       })
       .slice(0, widget.limit || 10);
-  }, [transactions, widget.groupBy, widget.metric, widget.limit]);
+  }, [transactions, widget.groupBy, widget.metric, widget.limit, widget.sourceFilter]);
 
   const maxValue = useMemo(() => {
     if (aggregatedData.length === 0) return 1;
@@ -183,6 +195,18 @@ function Widget({ widget, transactions, onRemove, onUpdate }) {
                 <option value={50}>All</option>
               </select>
             </div>
+            <div className="col-span-2">
+              <label className="block text-sm font-medium text-gray-700 mb-1">Source Filter</label>
+              <select
+                value={widget.sourceFilter || 'all'}
+                onChange={(e) => onUpdate({ ...widget, sourceFilter: e.target.value })}
+                className="w-full px-2 py-1 text-sm border border-gray-300 rounded focus:ring-2 focus:ring-indigo-500"
+              >
+                {SOURCE_FILTER_OPTIONS.map(opt => (
+                  <option key={opt.value} value={opt.value}>{opt.label}</option>
+                ))}
+              </select>
+            </div>
           </div>
         </div>
       )}
@@ -256,6 +280,8 @@ export default function WidgetPanel({ transactions, widgets, onWidgetsChange }) 
     { title: 'Income by Category', groupBy: 'category', metric: 'income', limit: 10 },
     { title: 'Transactions by Type', groupBy: 'type', metric: 'count', limit: 10 },
     { title: 'Yearly Overview', groupBy: 'year', metric: 'totalAmount', limit: 5 },
+    { title: 'Mastercard Spending', groupBy: 'counterparty', metric: 'expenses', limit: 10, sourceFilter: 'mastercard_pdf' },
+    { title: 'Bank Statement Only', groupBy: 'category', metric: 'expenses', limit: 10, sourceFilter: 'bank_statement' },
   ];
 
   return (

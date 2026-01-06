@@ -2,6 +2,13 @@ import 'dotenv/config';
 import express from 'express';
 import cors from 'cors';
 import { MongoClient, ObjectId } from 'mongodb';
+import multer from 'multer';
+import { createRequire } from 'module';
+const require = createRequire(import.meta.url);
+const pdf = require('pdf-parse');
+
+// Configure multer for file uploads
+const upload = multer({ storage: multer.memoryStorage() });
 
 const app = express();
 app.use(cors());
@@ -134,17 +141,24 @@ app.get('/api/transactions', async (req, res) => {
 // Aggregate/Group transactions
 app.get('/api/transactions/aggregate', async (req, res) => {
   try {
-    const { 
+    const {
       groupBy = 'category',  // category, counterparty, type, month, year, day
       startDate,
       endDate,
       category,
       minAmount,
-      maxAmount
+      maxAmount,
+      excludeCreditCardPayments = 'true'  // Exclude lump-sum CC payments by default
     } = req.query;
 
     const matchStage = {};
-    
+
+    // Exclude credit card payments (lump sum from bank CSV) to avoid double-counting
+    // when PDF details are also imported
+    if (excludeCreditCardPayments === 'true') {
+      matchStage.isCreditCardPayment = { $ne: true };
+    }
+
     if (category) matchStage.category = category;
     if (minAmount || maxAmount) {
       matchStage.amount = {};
@@ -211,9 +225,15 @@ app.get('/api/transactions/aggregate', async (req, res) => {
 // Get summary statistics
 app.get('/api/transactions/summary', async (req, res) => {
   try {
-    const { startDate, endDate } = req.query;
-    
+    const { startDate, endDate, excludeCreditCardPayments = 'true' } = req.query;
+
     const matchStage = {};
+
+    // Exclude credit card payments (lump sum from bank CSV) to avoid double-counting
+    if (excludeCreditCardPayments === 'true') {
+      matchStage.isCreditCardPayment = { $ne: true };
+    }
+
     if (startDate || endDate) {
       matchStage.dateObj = {};
       if (startDate) matchStage.dateObj.$gte = new Date(startDate);
@@ -225,10 +245,10 @@ app.get('/api/transactions/summary', async (req, res) => {
       {
         $group: {
           _id: null,
-          totalIncome: { 
+          totalIncome: {
             $sum: { $cond: [{ $gt: ['$amount', 0] }, '$amount', 0] }
           },
-          totalExpenses: { 
+          totalExpenses: {
             $sum: { $cond: [{ $lt: ['$amount', 0] }, { $abs: '$amount' }, 0] }
           },
           transactionCount: { $sum: 1 },
@@ -299,6 +319,166 @@ app.patch('/api/transactions/:id', async (req, res) => {
     res.status(500).json({ error: error.message });
   }
 });
+
+// Parse Mastercard PDF statements
+app.post('/api/transactions/parse-pdf', upload.array('files'), async (req, res) => {
+  try {
+    if (!req.files || req.files.length === 0) {
+      return res.status(400).json({ error: 'No PDF files uploaded' });
+    }
+
+    const allTransactions = [];
+    const errors = [];
+
+    for (const file of req.files) {
+      try {
+        const data = await pdf(file.buffer);
+        const text = data.text;
+
+        // Extract year from "Periode van transacties" line (e.g., "Van 05/01/2025 tot 04/02/2025")
+        const periodMatch = text.match(/Van\s+\d{2}\/\d{2}\/(\d{4})\s+tot/);
+        const year = periodMatch ? periodMatch[1] : new Date().getFullYear().toString();
+
+        // The PDF text has transactions in format:
+        // "DD/MMDD/MMDescription\n€ [-]amount"
+        // Where dates are stuck together and amount is on next line
+        // Example: "06/0108/01PAYPAL  BASIC FIT 0911 35314369001 NL\n€ -54,97"
+
+        const lines = text.split('\n');
+        let inDetailSection = false;
+        let pendingTransaction = null;
+
+        for (const line of lines) {
+          const trimmedLine = line.trim();
+
+          // Start of detail section
+          if (trimmedLine.includes('Kaartnummer') && trimmedLine.includes('XXXX')) {
+            inDetailSection = true;
+            continue;
+          }
+
+          // Skip header lines
+          if (trimmedLine.includes('Transacties van') ||
+              (trimmedLine.includes('Datum') && trimmedLine.includes('transactie'))) {
+            continue;
+          }
+
+          // End markers
+          if (trimmedLine.includes('Subtotaal')) {
+            // Process any pending transaction before breaking
+            if (pendingTransaction) {
+              allTransactions.push(pendingTransaction);
+              pendingTransaction = null;
+            }
+            break;
+          }
+
+          if (!inDetailSection) continue;
+
+          // Check if this is an amount line (starts with €)
+          const amountMatch = trimmedLine.match(/^€\s*([+-]?[\d.,]+)$/);
+          if (amountMatch && pendingTransaction) {
+            // Parse amount (European format: 1.234,56 -> 1234.56)
+            const amountStr = amountMatch[1];
+            pendingTransaction.amount = parseFloat(amountStr.replace(/\./g, '').replace(',', '.'));
+            allTransactions.push(pendingTransaction);
+            pendingTransaction = null;
+            continue;
+          }
+
+          // Check if this is a transaction line (starts with DD/MMDD/MM)
+          const txnMatch = trimmedLine.match(/^(\d{2})\/(\d{2})(\d{2})\/(\d{2})(.+)$/);
+          if (txnMatch) {
+            // Save any pending transaction first
+            if (pendingTransaction) {
+              allTransactions.push(pendingTransaction);
+            }
+
+            const [, day, month, , , description] = txnMatch;
+            const date = `${day}/${month}/${year}`;
+            const cleanDescription = description.trim();
+            const counterparty = extractMastercardCounterparty(cleanDescription);
+
+            pendingTransaction = {
+              date,
+              amount: 0, // Will be filled from next line
+              description: cleanDescription,
+              counterparty,
+              type: 'Mastercard',
+              source: 'mastercard_pdf',
+              category: categorizeTransaction(cleanDescription, -1) // Assume expense for categorization
+            };
+          }
+        }
+
+        // Don't forget any final pending transaction
+        if (pendingTransaction) {
+          allTransactions.push(pendingTransaction);
+        }
+      } catch (parseError) {
+        errors.push({ file: file.originalname, error: parseError.message });
+      }
+    }
+
+    res.json({
+      success: true,
+      transactions: allTransactions,
+      transactionCount: allTransactions.length,
+      fileCount: req.files.length,
+      errors: errors.length > 0 ? errors : undefined
+    });
+  } catch (error) {
+    console.error('PDF parse error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Extract counterparty from Mastercard description
+function extractMastercardCounterparty(description) {
+  const desc = description.trim();
+
+  // PAYPAL patterns - extract the actual merchant
+  if (desc.startsWith('PAYPAL ')) {
+    const merchant = desc.replace(/^PAYPAL\s+/, '').split(/\s+\d/)[0];
+    const merchantMap = {
+      'IBOOD': 'iBood',
+      'ITUNESAPPST AP': 'Apple/iTunes',
+      'AIRBNB': 'Airbnb',
+      'DISNEYPLUS': 'Disney+',
+    };
+    for (const [key, value] of Object.entries(merchantMap)) {
+      if (merchant.includes(key)) return value;
+    }
+    return merchant;
+  }
+
+  // Known merchants
+  if (desc.includes('IKEA')) return 'IKEA';
+  if (desc.includes('DPG Media')) return 'DPG Media';
+  if (desc.includes('RING STANDARD')) return 'Ring';
+
+  // Generic: take first part before location codes
+  const parts = desc.split(/\s+(?:BE|NL|DE|FR|GB|IE|LU)$/);
+  if (parts[0]) {
+    return parts[0].replace(/\s+\d+$/, '').trim();
+  }
+
+  return desc;
+}
+
+// Categorize transaction based on description
+function categorizeTransaction(description, amount) {
+  const desc = description.toLowerCase();
+  if (amount > 0) return 'Income';
+  if (desc.includes('ikea') || desc.includes('furniture')) return 'Shopping';
+  if (desc.includes('ibood')) return 'Shopping';
+  if (desc.includes('itunes') || desc.includes('apple')) return 'Entertainment';
+  if (desc.includes('disney') || desc.includes('netflix') || desc.includes('spotify')) return 'Entertainment';
+  if (desc.includes('airbnb') || desc.includes('hotel') || desc.includes('booking')) return 'Travel';
+  if (desc.includes('ring') && desc.includes('plan')) return 'Utilities';
+  if (desc.includes('dpg media')) return 'Subscriptions';
+  return 'Other';
+}
 
 // Health check endpoint - reports which database is being used
 app.get('/api/health', (req, res) => {
