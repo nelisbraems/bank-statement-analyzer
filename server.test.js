@@ -4,7 +4,7 @@ import 'dotenv/config';
 
 const API_URL = 'http://localhost:3001/api';
 const MONGO_URI = process.env.MONGO_URI || 'mongodb://localhost:27017';
-const DB_NAME = 'bank_analyzer';
+const TEST_DB_NAME = 'bank_analyzer_test';
 
 let client;
 let db;
@@ -30,13 +30,30 @@ const sampleTransaction2 = {
 
 describe('Transaction Import API', () => {
   beforeAll(async () => {
+    // Check that the server is running in test mode
+    const healthRes = await fetch(`${API_URL}/health`);
+    if (!healthRes.ok) {
+      throw new Error('Server is not running. Start it with: npm run server:test');
+    }
+    const health = await healthRes.json();
+    if (health.database !== TEST_DB_NAME) {
+      throw new Error(
+        `SAFETY CHECK FAILED: Server is using "${health.database}" database, not "${TEST_DB_NAME}". ` +
+        `Stop the server and restart with: npm run server:test`
+      );
+    }
+    console.log(`Server verified: using test database (${health.database})`);
+
     // Connect to MongoDB directly for setup/teardown
     client = new MongoClient(MONGO_URI);
     await client.connect();
-    db = client.db(DB_NAME);
+    db = client.db(TEST_DB_NAME);
   });
 
   afterAll(async () => {
+    // Clean up all test data after tests complete
+    await db.collection('transactions').deleteMany({});
+    console.log(`Test cleanup: removed all transactions from test database (${TEST_DB_NAME})`);
     await client.close();
   });
 

@@ -9,7 +9,7 @@ app.use(express.json({ limit: '50mb' }));
 
 // MongoDB connection
 const MONGO_URI = process.env.MONGO_URI || 'mongodb://localhost:27017';
-const DB_NAME = 'bank_analyzer';
+const DB_NAME = process.env.NODE_ENV === 'test' ? 'bank_analyzer_test' : 'bank_analyzer';
 let db;
 
 async function connectDB() {
@@ -300,10 +300,19 @@ app.patch('/api/transactions/:id', async (req, res) => {
   }
 });
 
+// Health check endpoint - reports which database is being used
+app.get('/api/health', (req, res) => {
+  res.json({
+    status: 'ok',
+    database: DB_NAME,
+    environment: process.env.NODE_ENV || 'development'
+  });
+});
+
 const PORT = process.env.PORT || 3001;
 
 connectDB().then(() => {
   app.listen(PORT, () => {
-    console.log(`Server running on http://localhost:${PORT}`);
+    console.log(`Server running on http://localhost:${PORT} (database: ${DB_NAME})`);
   });
 }).catch(console.error);
