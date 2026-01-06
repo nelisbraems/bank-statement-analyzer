@@ -1,11 +1,157 @@
 import React, { useState, useMemo } from 'react';
-import { ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight, Search, X, ChevronUp, ChevronDown, Filter } from 'lucide-react';
+import { ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight, Search, X, ChevronUp, ChevronDown, Filter, Calendar, Tag, CreditCard, FileText, User, DollarSign, Database } from 'lucide-react';
+
+// Transaction Detail Modal
+function TransactionDetailModal({ transaction, onClose }) {
+  if (!transaction) return null;
+
+  const formatDate = (dateStr) => {
+    if (!dateStr) return 'N/A';
+    // Handle both YYYY-MM-DD and DD/MM/YYYY formats
+    if (dateStr.includes('/')) {
+      const [day, month, year] = dateStr.split('/');
+      return new Date(year, month - 1, day).toLocaleDateString('en-GB', {
+        weekday: 'long',
+        year: 'numeric',
+        month: 'long',
+        day: 'numeric'
+      });
+    }
+    return new Date(dateStr).toLocaleDateString('en-GB', {
+      weekday: 'long',
+      year: 'numeric',
+      month: 'long',
+      day: 'numeric'
+    });
+  };
+
+  const DetailRow = ({ icon: Icon, label, value, highlight }) => (
+    <div className="flex items-start gap-3 py-3 border-b border-gray-100 last:border-0">
+      <Icon className="h-5 w-5 text-gray-400 mt-0.5 flex-shrink-0" />
+      <div className="flex-1 min-w-0">
+        <p className="text-sm text-gray-500">{label}</p>
+        <p className={`font-medium ${highlight || 'text-gray-800'} break-words`}>
+          {value || 'N/A'}
+        </p>
+      </div>
+    </div>
+  );
+
+  return (
+    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4" onClick={onClose}>
+      <div
+        className="bg-white rounded-2xl shadow-2xl w-full max-w-lg max-h-[90vh] overflow-hidden"
+        onClick={e => e.stopPropagation()}
+      >
+        {/* Header */}
+        <div className="bg-gradient-to-r from-indigo-500 to-purple-600 px-6 py-4">
+          <div className="flex justify-between items-start">
+            <div>
+              <p className="text-indigo-100 text-sm">Transaction Details</p>
+              <p className={`text-2xl font-bold ${transaction.amount >= 0 ? 'text-green-200' : 'text-white'}`}>
+                €{transaction.amount >= 0 ? '+' : ''}{transaction.amount.toFixed(2)}
+              </p>
+            </div>
+            <button
+              onClick={onClose}
+              className="text-white/80 hover:text-white p-1 hover:bg-white/10 rounded-lg transition-colors"
+            >
+              <X className="h-6 w-6" />
+            </button>
+          </div>
+        </div>
+
+        {/* Content */}
+        <div className="p-6 overflow-y-auto max-h-[60vh]">
+          <DetailRow
+            icon={Calendar}
+            label="Date"
+            value={formatDate(transaction.date)}
+          />
+
+          <DetailRow
+            icon={FileText}
+            label="Description"
+            value={transaction.description}
+          />
+
+          {transaction.counterparty && (
+            <DetailRow
+              icon={User}
+              label="Counterparty"
+              value={transaction.counterparty}
+            />
+          )}
+
+          <DetailRow
+            icon={Tag}
+            label="Category"
+            value={
+              <span className="inline-flex px-3 py-1 bg-indigo-100 text-indigo-700 rounded-full text-sm">
+                {transaction.category}
+              </span>
+            }
+          />
+
+          {transaction.type && (
+            <DetailRow
+              icon={CreditCard}
+              label="Transaction Type"
+              value={transaction.type}
+            />
+          )}
+
+          <DetailRow
+            icon={Database}
+            label="Source"
+            value={
+              <span className={`inline-flex px-3 py-1 rounded-full text-sm ${
+                transaction.source === 'mastercard_pdf'
+                  ? 'bg-orange-100 text-orange-700'
+                  : 'bg-blue-100 text-blue-700'
+              }`}>
+                {transaction.source === 'mastercard_pdf' ? 'Mastercard PDF' : 'Bank Statement (CSV)'}
+              </span>
+            }
+          />
+
+          {transaction.isCreditCardPayment && (
+            <div className="mt-4 p-3 bg-yellow-50 border border-yellow-200 rounded-lg">
+              <p className="text-sm text-yellow-800">
+                <strong>Note:</strong> This is a credit card payment transaction (lump sum).
+                It is excluded from spending totals to avoid double-counting with PDF details.
+              </p>
+            </div>
+          )}
+
+          <DetailRow
+            icon={DollarSign}
+            label="Amount"
+            value={`€${transaction.amount.toFixed(2)}`}
+            highlight={transaction.amount >= 0 ? 'text-green-600' : 'text-red-600'}
+          />
+        </div>
+
+        {/* Footer */}
+        <div className="px-6 py-4 bg-gray-50 border-t border-gray-100">
+          <button
+            onClick={onClose}
+            className="w-full py-2 px-4 bg-indigo-600 text-white font-medium rounded-lg hover:bg-indigo-700 transition-colors"
+          >
+            Close
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
 
 export default function TransactionGrid({ transactions, categories }) {
   const [currentPage, setCurrentPage] = useState(1);
   const [pageSize, setPageSize] = useState(25);
   const [sortField, setSortField] = useState('date');
   const [sortDirection, setSortDirection] = useState('desc');
+  const [selectedTransaction, setSelectedTransaction] = useState(null);
   const [filters, setFilters] = useState({
     search: '',
     category: '',
@@ -304,7 +450,11 @@ export default function TransactionGrid({ transactions, categories }) {
           </thead>
           <tbody>
             {paginatedTransactions.map((txn) => (
-              <tr key={txn.id} className="border-b border-gray-100 hover:bg-gray-50">
+              <tr
+                key={txn.id}
+                className="border-b border-gray-100 hover:bg-indigo-50 cursor-pointer transition-colors"
+                onClick={() => setSelectedTransaction(txn)}
+              >
                 <td className="py-3 px-4 text-gray-600 whitespace-nowrap">{txn.date}</td>
                 <td className="py-3 px-4 text-gray-800 max-w-md truncate" title={txn.description}>
                   {txn.description}
@@ -387,6 +537,14 @@ export default function TransactionGrid({ transactions, categories }) {
           </div>
         </div>
       </div>
+
+      {/* Transaction Detail Modal */}
+      {selectedTransaction && (
+        <TransactionDetailModal
+          transaction={selectedTransaction}
+          onClose={() => setSelectedTransaction(null)}
+        />
+      )}
     </div>
   );
 }

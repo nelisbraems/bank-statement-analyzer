@@ -4,7 +4,7 @@ import Papa from 'papaparse';
 import TransactionGrid from './components/TransactionGrid';
 import WidgetPanel from './components/WidgetPanel';
 
-const API_URL = 'http://localhost:3001/api';
+const API_URL = import.meta.env.PROD ? '/api' : 'http://localhost:3001/api';
 
 const DEFAULT_WIDGETS = [
   { id: 1, title: 'Spending by Category', groupBy: 'category', metric: 'expenses', limit: 10 },
@@ -53,7 +53,9 @@ export default function App() {
         amount: t.amount,
         type: t.type,
         category: t.category,
-        counterparty: t.counterparty
+        counterparty: t.counterparty,
+        source: t.source || 'bank_statement',
+        isCreditCardPayment: t.isCreditCardPayment || false
       })));
 
       // Build category totals from aggregation

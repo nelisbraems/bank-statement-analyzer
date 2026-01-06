@@ -1,5 +1,5 @@
 import React, { useState, useMemo } from 'react';
-import { Plus, X, GripVertical, ChevronDown, ChevronUp, BarChart3, Settings } from 'lucide-react';
+import { Plus, X, GripVertical, ChevronDown, ChevronUp, BarChart3, Settings, CreditCard, AlertTriangle, CheckCircle } from 'lucide-react';
 
 const GROUP_BY_OPTIONS = [
   { value: 'category', label: 'Category' },
@@ -32,9 +32,13 @@ function Widget({ widget, transactions, onRemove, onUpdate }) {
 
     // Filter by source if specified
     const sourceFilter = widget.sourceFilter || 'all';
-    const filteredTransactions = sourceFilter === 'all'
+    let filteredTransactions = sourceFilter === 'all'
       ? transactions
       : transactions.filter(txn => txn.source === sourceFilter);
+
+    // Exclude credit card lump-sum payments to avoid double-counting
+    // (they're replaced by detailed PDF transactions)
+    filteredTransactions = filteredTransactions.filter(txn => !txn.isCreditCardPayment);
 
     filteredTransactions.forEach(txn => {
       let key;
@@ -253,8 +257,143 @@ function Widget({ widget, transactions, onRemove, onUpdate }) {
   );
 }
 
+// Special widget to compare Mastercard CSV payments vs PDF details
+function MastercardReconciliation({ transactions, onRemove }) {
+  const [isCollapsed, setIsCollapsed] = useState(false);
+
+  const reconciliation = useMemo(() => {
+    // Sum of Mastercard lump-sum payments from CSV (marked as isCreditCardPayment)
+    const csvPayments = transactions.filter(t => t.isCreditCardPayment);
+    const csvTotal = Math.abs(csvPayments.reduce((sum, t) => sum + t.amount, 0));
+
+    // Sum of detailed transactions from PDF
+    const pdfTransactions = transactions.filter(t => t.source === 'mastercard_pdf');
+    const pdfTotal = Math.abs(pdfTransactions.reduce((sum, t) => sum + t.amount, 0));
+
+    // Difference (positive means PDF has more, negative means CSV has more)
+    const difference = pdfTotal - csvTotal;
+
+    return {
+      csvTotal,
+      csvCount: csvPayments.length,
+      pdfTotal,
+      pdfCount: pdfTransactions.length,
+      difference,
+      isBalanced: Math.abs(difference) < 0.01
+    };
+  }, [transactions]);
+
+  return (
+    <div className="bg-white rounded-xl shadow-lg overflow-hidden border-2 border-orange-200">
+      <div className="flex items-center justify-between px-4 py-3 bg-orange-50 border-b border-orange-200">
+        <div className="flex items-center gap-2">
+          <CreditCard className="h-5 w-5 text-orange-600" />
+          <span className="font-semibold text-gray-800">Mastercard Reconciliation</span>
+        </div>
+        <div className="flex items-center gap-1">
+          <button
+            onClick={() => setIsCollapsed(!isCollapsed)}
+            className="p-1 hover:bg-orange-100 rounded"
+          >
+            {isCollapsed ? (
+              <ChevronDown className="h-4 w-4 text-gray-500" />
+            ) : (
+              <ChevronUp className="h-4 w-4 text-gray-500" />
+            )}
+          </button>
+          <button
+            onClick={onRemove}
+            className="p-1 hover:bg-red-100 rounded"
+            title="Remove widget"
+          >
+            <X className="h-4 w-4 text-gray-500 hover:text-red-600" />
+          </button>
+        </div>
+      </div>
+
+      {!isCollapsed && (
+        <div className="p-4 space-y-4">
+          {/* CSV Payments */}
+          <div className="flex justify-between items-center p-3 bg-blue-50 rounded-lg">
+            <div>
+              <p className="text-sm font-medium text-blue-800">Bank CSV Payments</p>
+              <p className="text-xs text-blue-600">{reconciliation.csvCount} payment(s)</p>
+            </div>
+            <p className="text-lg font-bold text-blue-700">€{reconciliation.csvTotal.toFixed(2)}</p>
+          </div>
+
+          {/* PDF Details */}
+          <div className="flex justify-between items-center p-3 bg-orange-50 rounded-lg">
+            <div>
+              <p className="text-sm font-medium text-orange-800">PDF Transactions</p>
+              <p className="text-xs text-orange-600">{reconciliation.pdfCount} transaction(s)</p>
+            </div>
+            <p className="text-lg font-bold text-orange-700">€{reconciliation.pdfTotal.toFixed(2)}</p>
+          </div>
+
+          {/* Difference */}
+          <div className={`flex justify-between items-center p-3 rounded-lg ${
+            reconciliation.isBalanced
+              ? 'bg-green-50'
+              : 'bg-yellow-50'
+          }`}>
+            <div className="flex items-center gap-2">
+              {reconciliation.isBalanced ? (
+                <CheckCircle className="h-5 w-5 text-green-600" />
+              ) : (
+                <AlertTriangle className="h-5 w-5 text-yellow-600" />
+              )}
+              <div>
+                <p className={`text-sm font-medium ${
+                  reconciliation.isBalanced ? 'text-green-800' : 'text-yellow-800'
+                }`}>
+                  {reconciliation.isBalanced ? 'Balanced' : 'Difference'}
+                </p>
+                <p className={`text-xs ${
+                  reconciliation.isBalanced ? 'text-green-600' : 'text-yellow-600'
+                }`}>
+                  {reconciliation.isBalanced
+                    ? 'All payments accounted for'
+                    : reconciliation.difference > 0
+                      ? 'PDF has more than CSV'
+                      : 'CSV has more than PDF (missing PDF transactions?)'}
+                </p>
+              </div>
+            </div>
+            <p className={`text-lg font-bold ${
+              reconciliation.isBalanced
+                ? 'text-green-700'
+                : reconciliation.difference > 0
+                  ? 'text-yellow-700'
+                  : 'text-red-700'
+            }`}>
+              {reconciliation.difference >= 0 ? '+' : ''}€{reconciliation.difference.toFixed(2)}
+            </p>
+          </div>
+
+          {!reconciliation.isBalanced && Math.abs(reconciliation.difference) > 0.01 && (
+            <p className="text-xs text-gray-500 text-center">
+              This could indicate missing PDF uploads or transactions that span different statement periods.
+            </p>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 export default function WidgetPanel({ transactions, widgets, onWidgetsChange }) {
   const [showAddMenu, setShowAddMenu] = useState(false);
+  const [showReconciliation, setShowReconciliation] = useState(() => {
+    const saved = localStorage.getItem('showMastercardReconciliation');
+    return saved ? JSON.parse(saved) : false;
+  });
+
+  const toggleReconciliation = () => {
+    const newValue = !showReconciliation;
+    setShowReconciliation(newValue);
+    localStorage.setItem('showMastercardReconciliation', JSON.stringify(newValue));
+  };
 
   const addWidget = (preset) => {
     const newWidget = {
@@ -286,6 +425,31 @@ export default function WidgetPanel({ transactions, widgets, onWidgetsChange }) 
 
   return (
     <div className="space-y-6">
+      {/* Reconciliation toggle */}
+      <div className="flex justify-end">
+        <button
+          onClick={toggleReconciliation}
+          className={`flex items-center gap-2 px-4 py-2 rounded-lg transition-colors ${
+            showReconciliation
+              ? 'bg-orange-100 text-orange-700 border border-orange-300'
+              : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+          }`}
+        >
+          <CreditCard className="h-4 w-4" />
+          <span className="text-sm font-medium">
+            {showReconciliation ? 'Hide' : 'Show'} Mastercard Reconciliation
+          </span>
+        </button>
+      </div>
+
+      {/* Mastercard Reconciliation Widget */}
+      {showReconciliation && (
+        <MastercardReconciliation
+          transactions={transactions}
+          onRemove={toggleReconciliation}
+        />
+      )}
+
       {/* Widget grid */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         {widgets.map((widget) => (
