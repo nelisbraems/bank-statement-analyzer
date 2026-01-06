@@ -1,6 +1,8 @@
-import React, { useState } from 'react';
-import { Upload, DollarSign, TrendingUp, TrendingDown, PieChart, Check, X, ArrowRight } from 'lucide-react';
+import React, { useState, useEffect } from 'react';
+import { Upload, DollarSign, TrendingUp, TrendingDown, PieChart, Check, X, ArrowRight, Database, RefreshCw, Save } from 'lucide-react';
 import Papa from 'papaparse';
+
+const API_URL = 'http://localhost:3001/api';
 
 export default function App() {
   const [transactions, setTransactions] = useState([]);
@@ -9,6 +11,89 @@ export default function App() {
   const [columnMapping, setColumnMapping] = useState(null);
   const [rawData, setRawData] = useState(null);
   const [showMapping, setShowMapping] = useState(true);
+  const [viewMode, setViewMode] = useState('saved'); // 'saved' or 'upload'
+  const [loading, setLoading] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState(null);
+
+  // Fetch saved transactions from database
+  const fetchTransactions = async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      const [txnRes, summaryRes] = await Promise.all([
+        fetch(`${API_URL}/transactions`),
+        fetch(`${API_URL}/transactions/summary`)
+      ]);
+
+      if (!txnRes.ok || !summaryRes.ok) throw new Error('Failed to fetch data');
+
+      const txnData = await txnRes.json();
+      const summaryData = await summaryRes.json();
+
+      setTransactions(txnData.transactions.map((t, idx) => ({
+        id: t._id || idx,
+        date: t.date,
+        description: t.description,
+        amount: t.amount,
+        type: t.type,
+        category: t.category,
+        counterparty: t.counterparty
+      })));
+
+      // Build category totals from aggregation
+      const categoryRes = await fetch(`${API_URL}/transactions/aggregate?groupBy=category`);
+      const categoryData = await categoryRes.json();
+      const categoryTotals = {};
+      categoryData.results.forEach(r => {
+        if (r._id && r._id !== 'Income') {
+          categoryTotals[r._id] = r.expenses;
+        }
+      });
+
+      setSummary({
+        income: summaryData.totalIncome,
+        expenses: summaryData.totalExpenses,
+        net: summaryData.netBalance,
+        categoryTotals
+      });
+      setShowMapping(false);
+    } catch (err) {
+      console.error('Fetch error:', err);
+      setError('Failed to load transactions. Is the server running?');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // Save imported transactions to database
+  const saveToDatabase = async () => {
+    setSaving(true);
+    setError(null);
+    try {
+      const res = await fetch(`${API_URL}/transactions/import`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ transactions })
+      });
+
+      if (!res.ok) throw new Error('Failed to save');
+
+      const data = await res.json();
+      alert(data.message || `Successfully saved ${data.insertedCount} transactions!`);
+      setViewMode('saved');
+      fetchTransactions();
+    } catch (err) {
+      console.error('Save error:', err);
+      setError('Failed to save transactions');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  useEffect(() => {
+    fetchTransactions();
+  }, []);
 
   const requiredFields = [
     { key: 'date', label: 'Execution Date', description: 'Transaction date (Uitvoeringsdatum)' },
@@ -167,18 +252,57 @@ export default function App() {
         <div className="bg-white rounded-2xl shadow-xl p-8 mb-6">
           <div className="flex justify-between items-start mb-2">
             <h1 className="text-3xl font-bold text-gray-800">Bank Statement Analyzer</h1>
-            {(preview || transactions.length > 0) && (
-              <button
-                onClick={resetAnalyzer}
-                className="text-sm text-indigo-600 hover:text-indigo-800 font-medium"
-              >
-                Upload New File
-              </button>
-            )}
+            <div className="flex gap-2">
+              {viewMode === 'upload' && (
+                <button
+                  onClick={() => { resetAnalyzer(); setViewMode('saved'); fetchTransactions(); }}
+                  className="text-sm text-gray-600 hover:text-gray-800 font-medium flex items-center gap-1"
+                >
+                  <Database className="h-4 w-4" />
+                  View Saved
+                </button>
+              )}
+              {viewMode === 'saved' && (
+                <>
+                  <button
+                    onClick={fetchTransactions}
+                    disabled={loading}
+                    className="text-sm text-gray-600 hover:text-gray-800 font-medium flex items-center gap-1"
+                  >
+                    <RefreshCw className={`h-4 w-4 ${loading ? 'animate-spin' : ''}`} />
+                    Refresh
+                  </button>
+                  <button
+                    onClick={() => { resetAnalyzer(); setViewMode('upload'); }}
+                    className="text-sm text-indigo-600 hover:text-indigo-800 font-medium flex items-center gap-1"
+                  >
+                    <Upload className="h-4 w-4" />
+                    Import CSV
+                  </button>
+                </>
+              )}
+            </div>
           </div>
-          <p className="text-gray-600 mb-6">Upload your Belgian bank statement CSV to track income and expenses</p>
-          
-          {!preview && transactions.length === 0 && (
+          <p className="text-gray-600 mb-6">
+            {viewMode === 'saved'
+              ? 'Viewing transactions from database'
+              : 'Upload your Belgian bank statement CSV to track income and expenses'}
+          </p>
+
+          {error && (
+            <div className="mb-4 p-4 bg-red-50 border border-red-200 rounded-lg text-red-700">
+              {error}
+            </div>
+          )}
+
+          {loading && viewMode === 'saved' && (
+            <div className="text-center py-12">
+              <RefreshCw className="h-8 w-8 text-indigo-500 animate-spin mx-auto mb-4" />
+              <p className="text-gray-600">Loading transactions...</p>
+            </div>
+          )}
+
+          {viewMode === 'upload' && !preview && (
             <div className="border-2 border-dashed border-indigo-300 rounded-xl p-8 text-center hover:border-indigo-500 transition-colors bg-indigo-50">
               <Upload className="mx-auto h-12 w-12 text-indigo-400 mb-4" />
               <label className="cursor-pointer">
@@ -272,8 +396,25 @@ export default function App() {
           </div>
         )}
 
-        {!showMapping && summary && (
+        {!showMapping && summary && !loading && (
           <>
+            {viewMode === 'upload' && transactions.length > 0 && (
+              <div className="bg-green-50 border border-green-200 rounded-xl p-4 mb-6 flex items-center justify-between">
+                <div>
+                  <p className="font-semibold text-green-800">Ready to save {transactions.length} transactions</p>
+                  <p className="text-sm text-green-600">Save to database to persist your data</p>
+                </div>
+                <button
+                  onClick={saveToDatabase}
+                  disabled={saving}
+                  className="bg-green-600 text-white font-semibold py-2 px-4 rounded-lg hover:bg-green-700 transition-colors flex items-center gap-2 disabled:opacity-50"
+                >
+                  <Save className="h-4 w-4" />
+                  {saving ? 'Saving...' : 'Save to Database'}
+                </button>
+              </div>
+            )}
+
             <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-6">
               <div className="bg-white rounded-xl shadow-lg p-6 border-l-4 border-green-500">
                 <div className="flex items-center justify-between">

@@ -1,77 +1,109 @@
 # Bank Statement Analyzer
 
 ## Project Overview
-A React application for analyzing Belgian bank statement CSV exports. Automatically categorizes transactions, calculates income/expenses, and visualizes spending patterns.
+A full-stack React application for analyzing Belgian bank statement CSV exports. Stores transactions in MongoDB, supports flexible grouping/aggregation, and visualizes spending patterns.
 
 ## Tech Stack
-- **Framework:** React 18 + Vite
-- **Styling:** Tailwind CSS v4 (via @tailwindcss/vite plugin)
-- **CSV Parsing:** Papaparse
-- **Icons:** Lucide React
+**Frontend:**
+- React 18 + Vite
+- Tailwind CSS v4
+- Papaparse (CSV parsing)
+- Lucide React (icons)
 
-## Commands
-```bash
-npm run dev      # Start development server (http://localhost:5173)
-npm run build    # Create production build
-npm run preview  # Preview production build locally
-```
+**Backend:**
+- Node.js + Express
+- MongoDB
 
 ## Project Structure
 ```
-src/
-├── App.jsx      # Main component with all application logic
-├── main.jsx     # React entry point
-└── index.css    # Tailwind CSS import
+bank-statement-analyzer/
+├── src/
+│   ├── App.jsx          # Main React component
+│   ├── main.jsx         # React entry point
+│   └── index.css        # Tailwind import
+├── server.js            # Express API server
+├── package.json
+├── postcss.config.js
+└── CLAUDE.md
 ```
 
-## Key Features
-- CSV file upload with drag & drop support
-- Auto-detection of Belgian bank column formats (KBC, BNP, ING, Belfius)
-- Manual column mapping interface
-- Transaction categorization (Groceries, Dining, Transportation, etc.)
-- Income/Expense/Net balance summary
-- Category breakdown with percentage bars
-- Transaction history table sorted by date
+## Commands
+```bash
+# Start MongoDB (if local)
+mongod
 
-## Belgian Bank Support
-The app recognizes Dutch column names:
-- `Uitvoeringsdatum` → Date
-- `Bedrag` → Amount
-- `Mededeling` → Description
-- `Naam van de tegenpartij` → Counterparty
-- `Type verrichting` → Transaction type
-- `Status` → Status (filters out "geweigerd"/rejected)
+# Start backend server
+node server.js
 
-## Category Keywords
-Transactions are auto-categorized based on description keywords:
-- **Groceries:** Delhaize, Colruyt, Carrefour, Aldi, Lidl
-- **Dining:** restaurant, cafe, resto, horeca, pizza
-- **Transportation:** NMBS, De Lijn, Shell, Q8, Total, benzine
-- **Utilities:** Proximus, Telenet, Engie, Luminus
-- **Shopping:** Amazon, Bol.com, Coolblue, Zalando
-- **Entertainment:** Netflix, Spotify, Streamz, Disney
-- **Health & Fitness:** Basic-Fit, apotheek, pharmacy
+# Start frontend dev server (separate terminal)
+npm run dev
+```
 
-## Potential Improvements
-- [ ] Add date range filtering
-- [ ] Export analysis to PDF/CSV
-- [ ] Custom category rules (user-defined keywords)
-- [ ] Charts with Recharts (pie chart, monthly trends)
-- [ ] Multi-file upload for combining statements
-- [ ] Persist category rules to localStorage
-- [ ] Dark mode support
-- [ ] Monthly/yearly comparison views
-- [ ] Search/filter transactions
-- [ ] Edit transaction categories manually
+## API Endpoints
+
+### Transactions
+- `POST /api/transactions/import` - Bulk import transactions
+- `GET /api/transactions` - List transactions with filters
+- `PATCH /api/transactions/:id` - Update a transaction
+- `DELETE /api/transactions` - Delete all transactions
+
+### Aggregation
+- `GET /api/transactions/aggregate?groupBy=category` - Group transactions
+  - groupBy options: `category`, `counterparty`, `type`, `month`, `year`, `day`
+- `GET /api/transactions/summary` - Get income/expense totals
+- `GET /api/transactions/distinct/:field` - Get unique values for filters
+
+### Query Parameters (for filtering)
+- `category` - Filter by category
+- `counterparty` - Filter by counterparty (partial match)
+- `type` - Filter by transaction type
+- `minAmount` / `maxAmount` - Amount range
+- `startDate` / `endDate` - Date range
+- `sortBy` / `sortOrder` - Sorting
+- `limit` / `skip` - Pagination
+
+## MongoDB Schema
+```js
+{
+  date: String,           // Original date string
+  dateObj: Date,          // Parsed Date for queries
+  description: String,
+  amount: Number,
+  category: String,
+  counterparty: String,
+  type: String,
+  status: String,
+  importedAt: Date
+}
+```
+
+## Environment Variables
+```
+MONGO_URI=mongodb://localhost:27017
+PORT=3001
+```
+
+## Setup Instructions
+1. Install MongoDB locally or use MongoDB Atlas
+2. Run `npm install` for frontend deps
+3. Run `npm install express cors mongodb` for backend deps
+4. Start MongoDB: `mongod`
+5. Start backend: `node server.js`
+6. Start frontend: `npm run dev`
+
+## Features
+- [x] CSV upload with column mapping
+- [x] Auto-categorization
+- [x] MongoDB storage
+- [x] Flexible aggregation/grouping
+- [ ] Date range filtering UI
+- [ ] Group-by selector in UI
+- [ ] Charts with Recharts
+- [ ] Export to PDF/CSV
+- [ ] Custom category rules
+- [ ] Dark mode
 
 ## Code Conventions
-- Single-file component architecture (App.jsx contains all logic)
-- Tailwind utility classes for styling
-- State managed with React useState hooks
-- Papaparse with `dynamicTyping` and `delimitersToGuess` for robust CSV parsing
-
-## Notes
-- European number format supported (comma as decimal separator)
-- Handles both comma and semicolon CSV delimiters
-- Filters out rejected transactions (status contains "geweigerd")
-- Transactions sorted newest-first by default
+- Frontend: React functional components with hooks
+- Backend: Express with async/await
+- MongoDB: Native driver (not Mongoose)
