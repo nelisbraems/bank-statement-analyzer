@@ -23,6 +23,71 @@ if (process.env.NODE_ENV === 'production') {
   app.use(express.static(path.join(__dirname, 'dist')));
 }
 
+// Authentication
+const AUTH_PASSWORD = process.env.AUTH_PASSWORD;
+const sessions = new Map(); // Simple in-memory session store
+
+function generateToken() {
+  return Math.random().toString(36).substring(2) + Date.now().toString(36);
+}
+
+// Auth middleware - protects API routes
+function requireAuth(req, res, next) {
+  // Skip auth if no password is configured or in test mode
+  if (!AUTH_PASSWORD || process.env.NODE_ENV === 'test') {
+    return next();
+  }
+
+  const token = req.headers.authorization?.replace('Bearer ', '');
+  if (!token || !sessions.has(token)) {
+    return res.status(401).json({ error: 'Unauthorized' });
+  }
+  next();
+}
+
+// Login endpoint
+app.post('/api/auth/login', (req, res) => {
+  const { password } = req.body;
+
+  if (!AUTH_PASSWORD) {
+    // No password configured, auto-login
+    const token = generateToken();
+    sessions.set(token, { createdAt: Date.now() });
+    return res.json({ success: true, token });
+  }
+
+  if (password === AUTH_PASSWORD) {
+    const token = generateToken();
+    sessions.set(token, { createdAt: Date.now() });
+    res.json({ success: true, token });
+  } else {
+    res.status(401).json({ error: 'Invalid password' });
+  }
+});
+
+// Check auth status
+app.get('/api/auth/check', (req, res) => {
+  if (!AUTH_PASSWORD) {
+    return res.json({ authenticated: true, passwordRequired: false });
+  }
+
+  const token = req.headers.authorization?.replace('Bearer ', '');
+  if (token && sessions.has(token)) {
+    res.json({ authenticated: true, passwordRequired: true });
+  } else {
+    res.json({ authenticated: false, passwordRequired: true });
+  }
+});
+
+// Logout endpoint
+app.post('/api/auth/logout', (req, res) => {
+  const token = req.headers.authorization?.replace('Bearer ', '');
+  if (token) {
+    sessions.delete(token);
+  }
+  res.json({ success: true });
+});
+
 // MongoDB connection
 const MONGO_URI = process.env.MONGO_URI || 'mongodb://localhost:27017';
 const DB_NAME = process.env.NODE_ENV === 'test' ? 'bank_analyzer_test' : 'bank_analyzer';
@@ -48,7 +113,7 @@ async function connectDB() {
 }
 
 // Import transactions (bulk insert, skips duplicates)
-app.post('/api/transactions/import', async (req, res) => {
+app.post('/api/transactions/import', requireAuth, async (req, res) => {
   try {
     const { transactions } = req.body;
 
@@ -97,7 +162,7 @@ app.post('/api/transactions/import', async (req, res) => {
 });
 
 // Get all transactions with optional filters
-app.get('/api/transactions', async (req, res) => {
+app.get('/api/transactions', requireAuth, async (req, res) => {
   try {
     const { 
       category, 
@@ -148,7 +213,7 @@ app.get('/api/transactions', async (req, res) => {
 });
 
 // Aggregate/Group transactions
-app.get('/api/transactions/aggregate', async (req, res) => {
+app.get('/api/transactions/aggregate', requireAuth, async (req, res) => {
   try {
     const {
       groupBy = 'category',  // category, counterparty, type, month, year, day
@@ -232,7 +297,7 @@ app.get('/api/transactions/aggregate', async (req, res) => {
 });
 
 // Get summary statistics
-app.get('/api/transactions/summary', async (req, res) => {
+app.get('/api/transactions/summary', requireAuth, async (req, res) => {
   try {
     const { startDate, endDate, excludeCreditCardPayments = 'true' } = req.query;
 
@@ -283,7 +348,7 @@ app.get('/api/transactions/summary', async (req, res) => {
 });
 
 // Get distinct values for a field (for filter dropdowns)
-app.get('/api/transactions/distinct/:field', async (req, res) => {
+app.get('/api/transactions/distinct/:field', requireAuth, async (req, res) => {
   try {
     const { field } = req.params;
     const allowedFields = ['category', 'counterparty', 'type', 'status'];
@@ -301,7 +366,7 @@ app.get('/api/transactions/distinct/:field', async (req, res) => {
 });
 
 // Delete all transactions
-app.delete('/api/transactions', async (req, res) => {
+app.delete('/api/transactions', requireAuth, async (req, res) => {
   try {
     const result = await db.collection('transactions').deleteMany({});
     res.json({ success: true, deletedCount: result.deletedCount });
@@ -312,7 +377,7 @@ app.delete('/api/transactions', async (req, res) => {
 });
 
 // Update a transaction's category
-app.patch('/api/transactions/:id', async (req, res) => {
+app.patch('/api/transactions/:id', requireAuth, async (req, res) => {
   try {
     const { id } = req.params;
     const updates = req.body;
@@ -330,7 +395,7 @@ app.patch('/api/transactions/:id', async (req, res) => {
 });
 
 // Parse Mastercard PDF statements
-app.post('/api/transactions/parse-pdf', upload.array('files'), async (req, res) => {
+app.post('/api/transactions/parse-pdf', requireAuth, upload.array('files'), async (req, res) => {
   try {
     if (!req.files || req.files.length === 0) {
       return res.status(400).json({ error: 'No PDF files uploaded' });

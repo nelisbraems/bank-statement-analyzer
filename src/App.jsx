@@ -1,16 +1,92 @@
 import React, { useState, useEffect } from 'react';
-import { Upload, DollarSign, TrendingUp, TrendingDown, Check, X, ArrowRight, Database, RefreshCw, Save, CreditCard } from 'lucide-react';
+import { Upload, DollarSign, TrendingUp, TrendingDown, Check, X, ArrowRight, Database, RefreshCw, Save, CreditCard, Lock, LogOut } from 'lucide-react';
 import Papa from 'papaparse';
 import TransactionGrid from './components/TransactionGrid';
 import WidgetPanel from './components/WidgetPanel';
 
 const API_URL = import.meta.env.PROD ? '/api' : 'http://localhost:3001/api';
 
+// Get stored auth token
+const getAuthToken = () => localStorage.getItem('authToken');
+const setAuthToken = (token) => {
+  if (token) localStorage.setItem('authToken', token);
+  else localStorage.removeItem('authToken');
+};
+
+// Helper to add auth headers to fetch requests
+const authFetch = (url, options = {}) => {
+  const token = getAuthToken();
+  return fetch(url, {
+    ...options,
+    headers: {
+      ...options.headers,
+      ...(token ? { 'Authorization': `Bearer ${token}` } : {})
+    }
+  });
+};
+
+// Login Screen Component
+function LoginScreen({ onLogin, error, loading }) {
+  const [password, setPassword] = useState('');
+
+  const handleSubmit = (e) => {
+    e.preventDefault();
+    onLogin(password);
+  };
+
+  return (
+    <div className="min-h-screen bg-gradient-to-br from-blue-50 to-indigo-100 flex items-center justify-center p-6">
+      <div className="bg-white rounded-2xl shadow-xl p-8 w-full max-w-md">
+        <div className="text-center mb-8">
+          <div className="w-16 h-16 bg-indigo-100 rounded-full flex items-center justify-center mx-auto mb-4">
+            <Lock className="h-8 w-8 text-indigo-600" />
+          </div>
+          <h1 className="text-2xl font-bold text-gray-800">Bank Statement Analyzer</h1>
+          <p className="text-gray-600 mt-2">Enter password to access your data</p>
+        </div>
+
+        <form onSubmit={handleSubmit}>
+          {error && (
+            <div className="mb-4 p-3 bg-red-50 border border-red-200 rounded-lg text-red-700 text-sm">
+              {error}
+            </div>
+          )}
+
+          <div className="mb-6">
+            <input
+              type="password"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              placeholder="Password"
+              className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 text-lg"
+              autoFocus
+              disabled={loading}
+            />
+          </div>
+
+          <button
+            type="submit"
+            disabled={loading}
+            className="w-full bg-indigo-600 text-white font-semibold py-3 px-6 rounded-lg hover:bg-indigo-700 transition-colors disabled:opacity-50"
+          >
+            {loading ? 'Signing in...' : 'Sign In'}
+          </button>
+        </form>
+      </div>
+    </div>
+  );
+}
+
 const DEFAULT_WIDGETS = [
   { id: 1, title: 'Spending by Category', groupBy: 'category', metric: 'expenses', limit: 10 },
 ];
 
 export default function App() {
+  // Authentication state
+  const [isAuthenticated, setIsAuthenticated] = useState(false);
+  const [authLoading, setAuthLoading] = useState(true);
+  const [authError, setAuthError] = useState(null);
+
   const [transactions, setTransactions] = useState([]);
   const [summary, setSummary] = useState(null);
   const [preview, setPreview] = useState(null);
@@ -26,6 +102,72 @@ export default function App() {
     return saved ? JSON.parse(saved) : DEFAULT_WIDGETS;
   });
 
+  // Check authentication on mount
+  useEffect(() => {
+    checkAuth();
+  }, []);
+
+  const checkAuth = async () => {
+    setAuthLoading(true);
+    try {
+      const res = await authFetch(`${API_URL}/auth/check`);
+      const data = await res.json();
+
+      if (!data.passwordRequired) {
+        // No password configured, auto-authenticate
+        setIsAuthenticated(true);
+      } else if (data.authenticated) {
+        setIsAuthenticated(true);
+      } else {
+        setIsAuthenticated(false);
+      }
+    } catch (err) {
+      console.error('Auth check error:', err);
+      // If server is unreachable, still show login
+      setIsAuthenticated(false);
+    } finally {
+      setAuthLoading(false);
+    }
+  };
+
+  const handleLogin = async (password) => {
+    setAuthLoading(true);
+    setAuthError(null);
+    try {
+      const res = await fetch(`${API_URL}/auth/login`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ password })
+      });
+
+      const data = await res.json();
+
+      if (res.ok && data.success) {
+        setAuthToken(data.token);
+        setIsAuthenticated(true);
+      } else {
+        setAuthError(data.error || 'Invalid password');
+      }
+    } catch (err) {
+      console.error('Login error:', err);
+      setAuthError('Could not connect to server');
+    } finally {
+      setAuthLoading(false);
+    }
+  };
+
+  const handleLogout = async () => {
+    try {
+      await authFetch(`${API_URL}/auth/logout`, { method: 'POST' });
+    } catch (err) {
+      console.error('Logout error:', err);
+    }
+    setAuthToken(null);
+    setIsAuthenticated(false);
+    setTransactions([]);
+    setSummary(null);
+  };
+
   // Persist widgets to localStorage
   useEffect(() => {
     localStorage.setItem('bankAnalyzerWidgets', JSON.stringify(widgets));
@@ -37,8 +179,8 @@ export default function App() {
     setError(null);
     try {
       const [txnRes, summaryRes] = await Promise.all([
-        fetch(`${API_URL}/transactions`),
-        fetch(`${API_URL}/transactions/summary`)
+        authFetch(`${API_URL}/transactions`),
+        authFetch(`${API_URL}/transactions/summary`)
       ]);
 
       if (!txnRes.ok || !summaryRes.ok) throw new Error('Failed to fetch data');
@@ -59,7 +201,7 @@ export default function App() {
       })));
 
       // Build category totals from aggregation
-      const categoryRes = await fetch(`${API_URL}/transactions/aggregate?groupBy=category`);
+      const categoryRes = await authFetch(`${API_URL}/transactions/aggregate?groupBy=category`);
       const categoryData = await categoryRes.json();
       const categoryTotals = {};
       categoryData.results.forEach(r => {
@@ -88,7 +230,7 @@ export default function App() {
     setSaving(true);
     setError(null);
     try {
-      const res = await fetch(`${API_URL}/transactions/import`, {
+      const res = await authFetch(`${API_URL}/transactions/import`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ transactions })
@@ -108,9 +250,12 @@ export default function App() {
     }
   };
 
+  // Fetch transactions when authenticated
   useEffect(() => {
-    fetchTransactions();
-  }, []);
+    if (isAuthenticated) {
+      fetchTransactions();
+    }
+  }, [isAuthenticated]);
 
   const requiredFields = [
     { key: 'date', label: 'Execution Date', description: 'Transaction date (Uitvoeringsdatum)' },
@@ -332,7 +477,7 @@ export default function App() {
       const formData = new FormData();
       pdfFiles.forEach(file => formData.append('files', file));
 
-      const res = await fetch(`${API_URL}/transactions/parse-pdf`, {
+      const res = await authFetch(`${API_URL}/transactions/parse-pdf`, {
         method: 'POST',
         body: formData
       });
@@ -387,6 +532,20 @@ export default function App() {
     setShowMapping(true);
   };
 
+  // Show loading while checking auth
+  if (authLoading) {
+    return (
+      <div className="min-h-screen bg-gradient-to-br from-blue-50 to-indigo-100 flex items-center justify-center">
+        <RefreshCw className="h-8 w-8 text-indigo-500 animate-spin" />
+      </div>
+    );
+  }
+
+  // Show login screen if not authenticated
+  if (!isAuthenticated) {
+    return <LoginScreen onLogin={handleLogin} error={authError} loading={authLoading} />;
+  }
+
   return (
     <div className="min-h-screen bg-gradient-to-br from-blue-50 to-indigo-100 p-6">
       <div className="max-w-6xl mx-auto">
@@ -422,6 +581,13 @@ export default function App() {
                   </button>
                 </>
               )}
+              <button
+                onClick={handleLogout}
+                className="text-sm text-gray-500 hover:text-red-600 font-medium flex items-center gap-1 ml-2"
+                title="Sign out"
+              >
+                <LogOut className="h-4 w-4" />
+              </button>
             </div>
           </div>
           <p className="text-gray-600 mb-6">
