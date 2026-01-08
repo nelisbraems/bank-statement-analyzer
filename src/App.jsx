@@ -404,9 +404,13 @@ export default function App() {
   };
 
   // Check if transaction is a credit card payment (to exclude from spending totals)
-  const isCreditCardPayment = (description, type) => {
+  const isCreditCardPayment = (description, type, details) => {
     if (type === 'Kredietkaartbetaling') return true;
-    if (description && description.match(/^MASTERCARD\s+\d+/i)) return true;
+    // Check both description (Mededeling) and details for Mastercard patterns
+    const textToCheck = `${description || ''} ${details || ''}`;
+    if (textToCheck.match(/MASTERCARD\s+\d+/i)) return true;
+    if (textToCheck.match(/AFREKENING MASTERCARD/i)) return true;
+    if (textToCheck.match(/BETALING AAN BANK CARD COMPANY/i)) return true;
     return false;
   };
 
@@ -517,7 +521,7 @@ export default function App() {
       if (isNaN(amount)) amount = 0;
 
       // Check if this is a credit card payment
-      const creditCardPayment = isCreditCardPayment(description || details, type);
+      const creditCardPayment = isCreditCardPayment(description, type, details);
 
       return {
         id: idx,
