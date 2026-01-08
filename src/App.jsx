@@ -179,7 +179,7 @@ export default function App() {
     setError(null);
     try {
       const [txnRes, summaryRes] = await Promise.all([
-        authFetch(`${API_URL}/transactions`),
+        authFetch(`${API_URL}/transactions?limit=10000`),
         authFetch(`${API_URL}/transactions/summary`)
       ]);
 
@@ -523,6 +523,7 @@ export default function App() {
         id: idx,
         date: row[columnMapping.date] || '',
         description: fullDescription.trim(),
+        originalDescription: `${description || ''}|${details || ''}`,  // Combine both for unique deduplication
         details: details || null,
         amount,
         type,

@@ -100,8 +100,15 @@ async function connectDB() {
   console.log('Connected to MongoDB');
 
   // Create unique compound index to prevent duplicate transactions
+  // Uses originalDescription (raw CSV data) for uniqueness - captures unique REFERTE numbers
+  // Drop old index first if it exists with different fields
+  try {
+    await db.collection('transactions').dropIndex('unique_transaction');
+  } catch (e) {
+    // Index may not exist, ignore
+  }
   await db.collection('transactions').createIndex(
-    { date: 1, amount: 1, counterparty: 1, description: 1 },
+    { date: 1, amount: 1, originalDescription: 1 },
     { unique: true, name: 'unique_transaction' }
   );
 
