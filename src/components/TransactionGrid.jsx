@@ -292,6 +292,11 @@ export default function TransactionGrid({ transactions, categories }) {
 
   const activeFilterCount = Object.values(filters).filter(v => v !== '').length;
 
+  // Calculate total amount for filtered transactions
+  const totalAmount = useMemo(() => {
+    return filteredTransactions.reduce((sum, txn) => sum + (txn.amount || 0), 0);
+  }, [filteredTransactions]);
+
   return (
     <div className="bg-white rounded-2xl shadow-xl p-8">
       {/* Header with search and filter toggle */}
@@ -300,6 +305,10 @@ export default function TransactionGrid({ transactions, categories }) {
           <h2 className="text-2xl font-bold text-gray-800">Transactions</h2>
           <p className="text-sm text-gray-500">
             {filteredTransactions.length} of {transactions.length} transactions
+            <span className="mx-2">|</span>
+            <span className={`font-semibold ${totalAmount >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+              Total: €{totalAmount >= 0 ? '+' : ''}{totalAmount.toFixed(2)}
+            </span>
           </p>
         </div>
 
